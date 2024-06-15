@@ -2,22 +2,26 @@
 Author: hibana2077 hibana2077@gmail.com
 Date: 2024-05-06 21:09:40
 LastEditors: hibana2077 hibana2077@gmaill.com
-LastEditTime: 2024-05-07 16:52:31
+LastEditTime: 2024-06-13 15:49:11
 FilePath: \Digital-TA\src\backend\main.py
 Description: Here is the main file for the FastAPI server.
 '''
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import OllamaEmbeddings
+from contextlib import asynccontextmanager
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 import os
 import time
 import uvicorn
+import requests
 from fastapi.middleware.cors import CORSMiddleware
 
-embeddings = OllamaEmbeddings()
+ollama_server = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
+HOST = os.getenv("HOST", "127.0.0.1")
+embeddings = OllamaEmbeddings(base_url=ollama_server)
 
 app = FastAPI()
 
@@ -28,6 +32,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # pull model from ollama
+    _ = requests.post(f"{ollama_server}/api/pull", json={"name": "llama2"})
 
 @app.get("/")
 def read_root():
@@ -53,7 +62,7 @@ def test_embedding_count():
         files = os.listdir(directory)
         return {"embedding_count": len(files), "embedding_names": files}
     else:
-        return {"embedding_count": 0, "message": "No such directory."}
+        return {"embedding_count": 0, "embedding_names": []}
 
 @app.get("/file_count")
 def test_file_count():
@@ -105,10 +114,13 @@ async def upload_file(file: UploadFile = File(...)):
         return JSONResponse(status_code=200, content={"message": "File uploaded successfully", "file_path": file_location})
 
 @app.post("/create_embeddings")
-async def create_embeddings(file_name: str, embedding_name: str, auth_password: str):
+async def create_embeddings(data: dict):
+    file_name: str = data["file_name"]
+    embedding_name: str = data["embedding_name"]
+    auth_password: str = data["auth_password"]
     if auth_password == "admin":
         time_start = time.time()
-        embeddings = OllamaEmbeddings(model='llama2')
+        embeddings = OllamaEmbeddings(model='llama2', base_url=ollama_server)
         loader = PyPDFLoader("files/" + file_name)
         pages = loader.load_and_split()
         vectorstore = FAISS.from_documents(pages, embeddings)
@@ -118,6 +130,17 @@ async def create_embeddings(file_name: str, embedding_name: str, auth_password: 
     else:
         return {"message": "Authentication failed"}
 
+@app.post("/embed_query")
+async def embed_query(data: dict):
+    ts = time.time()
+    embedding_name: str = data["embedding_name"]
+    user_input: str = data["user_input"]
+    embeddings = OllamaEmbeddings(model='llama2', base_url=ollama_server)
+    # load the embeddings
+    vectorstore = FAISS.load_local("embeddings/" + embedding_name,embeddings,allow_dangerous_deserialization=True)
+    # do similarity search
+    results = vectorstore.similarity_search(user_input)
+    return {"results": results, "time": time.time() - ts}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8081) # In docker need to change to 0.0.0.0
+    uvicorn.run(app, host=HOST, port=8081) # In docker need to change to 0.0.0.0

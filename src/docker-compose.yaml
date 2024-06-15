@@ -1,15 +1,15 @@
-version: "3.8"
-
 services:
   web:
     build: ./st_web
     ports:
       - "80:80"
     volumes:
-      - .:/app
+      - ./st_web:/app
     environment:
-      TRANSLATOR_PROVIDER: deepl
+      TRANSLATOR_PROVIDER: google
       API_URL: "http://backend:8081"
+      BACKEND_SERVER: "http://backend:8081"
+      OLLAMA_SERVER: "http://ollama:11434"
     depends_on:
       - backend
     networks:
@@ -20,11 +20,13 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - .:/app
+      - ./backend:/app
     environment:
+      HOST: "0.0.0.0"
       LLM_PROVIDER: groq
       LLM_MODEL: llama3-70b-8192
       LLM_API_TOKEN: "your-api-token-here"
+      OLLAMA_SERVER: "http://ollama:11434"
     depends_on:
       - db
     networks:
@@ -32,13 +34,28 @@ services:
 
   db:
     restart: always
-    image: redis:lastest
+    image: redis:latest
     ports:
       - "6379:6379"
     volumes:
       - /data/redis-data:/data
     networks:
       - mynet
+    
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    networks:
+      - mynet
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    volumes:
+      - ./ollama:/root/.ollama:rw
 
 networks:
   mynet:

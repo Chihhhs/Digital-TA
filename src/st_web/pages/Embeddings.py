@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import os
@@ -25,6 +24,7 @@ if response.status_code == 200 and response.json()["file_count"] > 0:
     for file in files:
         st.write(file)
 else:
+    files = []
     st.write("No files have been uploaded yet.")
 
 # make new embeddings
@@ -40,6 +40,6 @@ if st.button("Create Embeddings"):
         json={"file_name": selected_file, "embedding_name": embedding_name, "auth_password": auth_password},
     )
     if response.status_code == 200:
-        st.write(response.json()["message"])
+        st.success(response.json()["message"] + f" Time taken: {str(response.json()['time'])} seconds.")
     else:
-        st.write("An error occurred.")
+        st.warning("An error occurred.")
