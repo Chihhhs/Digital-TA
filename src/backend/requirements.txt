@@ -18,3 +18,5 @@ translators
 fastapi
 
 redis
+
+python-multipart

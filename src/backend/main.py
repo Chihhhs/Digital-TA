@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
+import redis
 import os
 import time
 import uvicorn
@@ -20,8 +21,14 @@ import requests
 from fastapi.middleware.cors import CORSMiddleware
 
 ollama_server = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
+redis_server = os.getenv("REDIS_SERVER", "localhost")
+redis_port = os.getenv("REDIS_PORT", 6379)
 HOST = os.getenv("HOST", "127.0.0.1")
 embeddings = OllamaEmbeddings(base_url=ollama_server)
+
+counter_db = redis.Redis(host=redis_server, port=redis_port, db=0) # string
+user_rec_db = redis.Redis(host=redis_server, port=redis_port, db=1) # hash
+question_str_db = redis.Redis(host=redis_server, port=redis_port, db=2) # list
 
 app = FastAPI()
 
@@ -33,10 +40,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+@app.on_event("startup")
+async def startup_event():
     # pull model from ollama
-    _ = requests.post(f"{ollama_server}/api/pull", json={"name": "llama2"})
+    _ = requests.post(f"{ollama_server}/api/pull", json={"name": "llama3.1:70b"})
+    _ = requests.post(f"{ollama_server}/api/pull", json={"name": "nomic-embed-text"})
+
 
 @app.get("/")
 def read_root():
@@ -120,7 +129,7 @@ async def create_embeddings(data: dict):
     auth_password: str = data["auth_password"]
     if auth_password == "admin":
         time_start = time.time()
-        embeddings = OllamaEmbeddings(model='llama2', base_url=ollama_server)
+        embeddings = OllamaEmbeddings(model='nomic-embed-text', base_url=ollama_server)
         loader = PyPDFLoader("files/" + file_name)
         pages = loader.load_and_split()
         vectorstore = FAISS.from_documents(pages, embeddings)
@@ -135,12 +144,36 @@ async def embed_query(data: dict):
     ts = time.time()
     embedding_name: str = data["embedding_name"]
     user_input: str = data["user_input"]
-    embeddings = OllamaEmbeddings(model='llama2', base_url=ollama_server)
+    embeddings = OllamaEmbeddings(model='nomic-embed-text', base_url=ollama_server)
     # load the embeddings
     vectorstore = FAISS.load_local("embeddings/" + embedding_name,embeddings,allow_dangerous_deserialization=True)
     # do similarity search
     results = vectorstore.similarity_search(user_input)
     return {"results": results, "time": time.time() - ts}
+
+@app.post("/user_rec")
+async def user_rec(data: dict):
+    ts = time.time()
+    embedding_name: str = data["embedding_name"]
+    user_name: str = data["user_name"]
+    question_str: str = data["question_str"]
+    # save user input to redis
+    # name -> user_name, value -> {embedding_name: embedding_name, conversation_times: 1}
+    # check if user_name exists
+    if user_rec_db.hexists(user_name, embedding_name):
+        user_rec_db.hincrby(user_name, "conversation_times", 1)
+        question_str_db_id = user_rec_db.hget(user_name, "question_str_id")
+        question_str_db.rpush(question_str_db_id, question_str)
+    else:
+        question_str_id = counter_db.incr("question_str_id")
+        user_rec_db.hset(user_name, "embedding_name", embedding_name)
+        user_rec_db.hset(user_name, "conversation_times", 1)
+        user_rec_db.hset(user_name, "question_str_id", question_str_id)
+        question_str_db.rpush(question_str_id, question_str)
+    # return the updated user_rec
+    info = user_rec_db.hgetall(user_name)
+    return {"user_rec": info, "time": time.time() - ts}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host=HOST, port=8081) # In docker need to change to 0.0.0.0
