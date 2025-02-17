@@ -8,7 +8,7 @@ Description: Here is the main file for the FastAPI server.
 '''
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama.embeddings import OllamaEmbeddings
 from contextlib import asynccontextmanager
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import FastAPI, File, UploadFile
@@ -24,7 +24,6 @@ ollama_server = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
 redis_server = os.getenv("REDIS_SERVER", "localhost")
 redis_port = os.getenv("REDIS_PORT", 6379)
 HOST = os.getenv("HOST", "127.0.0.1")
-embeddings = OllamaEmbeddings(base_url=ollama_server)
 
 counter_db = redis.Redis(host=redis_server, port=redis_port, db=0) # string
 user_rec_db = redis.Redis(host=redis_server, port=redis_port, db=1) # hash
@@ -43,7 +42,6 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     # pull model from ollama
-    _ = requests.post(f"{ollama_server}/api/pull", json={"name": "llama3.1:70b"})
     _ = requests.post(f"{ollama_server}/api/pull", json={"name": "nomic-embed-text"})
 
 
@@ -60,6 +58,7 @@ def read_root():
 @app.get("/test/embeddings")
 def test_embeddings(text: str):
     time_start = time.time()
+    embeddings = OllamaEmbeddings(base_url=ollama_server, model='nomic-embed-text')
     embeddings_list = embeddings.embed_query(text)
     time_end = time.time()
     return {"embeddings": embeddings_list, "time": time_end - time_start,"model_name":embeddings.model}
@@ -143,7 +142,7 @@ async def create_embeddings(data: dict):
 async def embed_query(data: dict):
     ts = time.time()
     embedding_name: str = data["embedding_name"]
-    user_input: str = data["user_input"]
+    user_input: str = str(data["user_input"])
     embeddings = OllamaEmbeddings(model='nomic-embed-text', base_url=ollama_server)
     # load the embeddings
     vectorstore = FAISS.load_local("embeddings/" + embedding_name,embeddings,allow_dangerous_deserialization=True)
@@ -155,25 +154,40 @@ async def embed_query(data: dict):
 async def user_rec(data: dict):
     ts = time.time()
     embedding_name: str = data["embedding_name"]
-    user_name: str = data["user_name"]
+    student_id: str = data["student_id"]
     question_str: str = data["question_str"]
     # save user input to redis
-    # name -> user_name, value -> {embedding_name: embedding_name, conversation_times: 1}
-    # check if user_name exists
-    if user_rec_db.hexists(user_name, embedding_name):
-        user_rec_db.hincrby(user_name, "conversation_times", 1)
-        question_str_db_id = user_rec_db.hget(user_name, "question_str_id")
+    # name -> student_id, value -> {embedding_name: embedding_name, conversation_times: 1}
+    # check if student_id exists
+    key = f"{student_id}:{embedding_name}"
+    if user_rec_db.hexists(key, "conversation_times"):
+        user_rec_db.hincrby(key, "conversation_times", 1)
+        question_str_db_id = user_rec_db.hget(key, "question_str_id")
         question_str_db.rpush(question_str_db_id, question_str)
     else:
         question_str_id = counter_db.incr("question_str_id")
-        user_rec_db.hset(user_name, "embedding_name", embedding_name)
-        user_rec_db.hset(user_name, "conversation_times", 1)
-        user_rec_db.hset(user_name, "question_str_id", question_str_id)
+        user_rec_db.hset(key, "conversation_times", 1)
+        user_rec_db.hset(key, "question_str_id", question_str_id)
         question_str_db.rpush(question_str_id, question_str)
     # return the updated user_rec
-    info = user_rec_db.hgetall(user_name)
+    info = user_rec_db.hgetall(student_id)
     return {"user_rec": info, "time": time.time() - ts}
 
+@app.get("/user_rec")
+async def get_user_rec(data: dict):
+    ts = time.time()
+    student_id: str = data["student_id"]
+    embedding_name: str = data["embedding_name"]
+
+    # 使用 student_id:embedding_name 作為鍵檢索
+    key = f"{student_id}:{embedding_name}"
+    if not user_rec_db.exists(key):
+        return {"error": "No record found", "time": time.time() - ts}
+
+    # 獲取相關數據
+    question_str_id = user_rec_db.hget(key, "question_str_id")
+    questions = question_str_db.lrange(question_str_id, 0, -1)
+    return {"questions": questions, "time": time.time() - ts}
 
 if __name__ == "__main__":
     uvicorn.run(app, host=HOST, port=8081) # In docker need to change to 0.0.0.0

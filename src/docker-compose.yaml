@@ -10,6 +10,8 @@ services:
       API_URL: "http://backend:8081"
       BACKEND_SERVER: "http://backend:8081"
       OLLAMA_SERVER: "http://ollama:11434"
+      OPENAI_API_KEY: "sk-xxxxx"
+      GROQ_API_KEY: "gsk-xxxxx"
     depends_on:
       - backend
     networks:

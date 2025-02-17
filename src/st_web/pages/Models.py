@@ -29,6 +29,10 @@ st.table(local_models)
 st.markdown("## Change Chat Model")
 local_models = get_local_models()
 local_models_list = [model["name"] for model in local_models]
+local_models_list.append("llama-3.3-70b-versatile-groq")
+local_models_list.append("llama-3.2-90b-vision-preview-groq")
+local_models_list.append("llama-3.2-11b-vision-preview-groq")
+local_models_list.append("o1-mini-openai")
 model_name = st.selectbox("Select a model", local_models_list, index=None)
 if model_name != None and st.button("Change Model"):
     if "chat_model" in st.session_state:

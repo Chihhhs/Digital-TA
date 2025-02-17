@@ -1,9 +1,14 @@
-from langchain_community.chat_models import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages.ai import AIMessage
 from langchain_core.messages.human import HumanMessage
 from langchain_core.messages.system import SystemMessage
+from langchain_groq.chat_models import ChatGroq
+from langchain_openai.chat_models import ChatOpenAI
+from langchain_ollama.chat_models import ChatOllama
+from langchain_ollama.embeddings import OllamaEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_core.documents import Document
 import streamlit as st
 import translators as ts
 import requests
@@ -12,13 +17,16 @@ import os
 # _ = ts.preaccelerate_and_speedtest(timeout=1.5)
 OLLAMA_SERVER = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
 BACKEND_SERVER = os.getenv("BACKEND_SERVER", "http://localhost:8081")
+OPEN_API_KEY = os.getenv("OPENAI_API_KEY", "sk_test_1234567890")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "gsk_test_1234567890")
 TRANSLATOR_PROVIDER = os.getenv("TRANSLATOR_PROVIDER", "google")
 EXTRACT_PROMPT = ChatPromptTemplate.from_template(
     "You are an Top algorithm, you need to according to user input extract information from the content. user input: {user_input}, content: {content}"
 )
 
 if 'chat_model' not in st.session_state:
-    st.session_state['chat_model'] = "llama3.1:70b"
+    st.session_state['chat_model'] = "llama-3.3-70b-versatile-groq"
+    # st.session_state['chat_model'] = "llama-3.1-70b-versatile-groq"
 
 def get_all_embeddings() -> list:
     response = requests.get(f"{BACKEND_SERVER}/embedding_count")
@@ -28,7 +36,7 @@ def get_all_embeddings() -> list:
         return []
 
 def embeddings_search(user_input: str, embedding_name: str) -> dict:
-    user_input = ts.translate_text(user_input, translator=TRANSLATOR_PROVIDER, to_language="en")
+    # user_input = ts.translate_text(user_input, translator=TRANSLATOR_PROVIDER, to_language="en")
     response = requests.post(f"{BACKEND_SERVER}/embed_query", json={"user_input": user_input, "embedding_name": embedding_name})
     if response.status_code == 200:
         return response.json()
@@ -38,13 +46,7 @@ def embeddings_search(user_input: str, embedding_name: str) -> dict:
 def init_chat_history() -> ChatPromptTemplate:
     if 'chat_history' not in st.session_state:
         template = ChatPromptTemplate.from_messages([
-            ('system', "You are an AI Teaching Assistant, you need to help students with their questions based on the content of the textbooks."),
-            ('system', """If your reference content has pages, please provide the page number in your response. below is an Example:
-user_input: What specific feature of gliomas makes them particularly challenging to treat and differentiate from normal brain tissue?
-content: Page: 1, Pdf: Glioma.pdf : Glioma is a common type of tumor originating in the brain. About 33 percent of all brain tumors are gliomas, which originate in the glial cells that surround and support neurons in the brain, including astrocytes, oligodendrocytes and ependymal cells.
-Gliomas are called intra-axial brain tumors because they grow within the substance of the brain and often mix with normal brain tissue.
-response: The specific feature of gliomas that makes them particularly challenging to treat and differentiate from normal brain tissue is that they grow within the substance of the brain and often mix with normal brain tissue. This characteristic makes it difficult to clearly distinguish the boundaries between the tumor and healthy brain cells, complicating both surgical removal and treatment planning.
-you can find more information in page 1 of the Glioma.pdf""")
+            ('system', "You are an AI Teaching Assistant, you need to help students with their questions based on the extracted information."),
         ])
         st.session_state['chat_history'] = template
     else:
@@ -59,19 +61,64 @@ with header_col:
 with embeddings_select_col:
     embeddings = get_all_embeddings()
     embeddings_select = st.selectbox("Select an embedding", embeddings, index=None)
-
-with embeddings_select_col:
-    enable_translation = st.checkbox("Enable Translation", value=False)
+    student_id = st.text_input("Student ID")
 
 st.divider()
 
 chat_tmp = init_chat_history()
-llm = ChatOllama(model=st.session_state['chat_model'], base_url=OLLAMA_SERVER)
+# llm = ChatOllama(model=st.session_state['chat_model'], base_url=OLLAMA_SERVER)
+if st.session_state['chat_model'][-4:] == "groq":
+    llm = ChatGroq(model=st.session_state['chat_model'][0:-5], api_key=GROQ_API_KEY)
+elif st.session_state['chat_model'][-6:] == "openai":
+    llm = ChatOpenAI(model=st.session_state['chat_model'][0:-7], api_key=OPEN_API_KEY)
+else:
+    llm = ChatOllama(model=st.session_state['chat_model'], base_url=OLLAMA_SERVER)
 user_input = st.chat_input("You can start a conversation with the AI Teaching Assistant here.")
 chain = chat_tmp | llm | StrOutputParser()
 
 if user_input:
     if embeddings_select != None:
+        enable_guided_reply = False
+        # check user input is similar to previous questions
+        questions = requests.get(f"{BACKEND_SERVER}/user_rec", json={"student_id": student_id, "embedding_name": embeddings_select, "question_str": user_input})
+        # using text embedding to check similarity
+        # if similarity > 0.9, return the response
+        # else, continue to search the content
+        if questions.status_code == 200:
+            questions = questions.json()
+            if "questions" in questions.keys():
+
+                # using text embedding to check similarity
+                vectorstore = InMemoryVectorStore(OllamaEmbeddings(model='nomic-embed-text', base_url=OLLAMA_SERVER))
+                temp_documents = []
+                for idx,question in enumerate(questions["questions"]):
+                    temp_documents.append(Document(id=str(idx), page_content=question))
+                vectorstore.add_documents(documents=temp_documents)
+                results = vectorstore.similarity_search_with_score(
+                    query=user_input, k=1
+                )
+                retrieved_documents = [doc for doc, score in results if score > 0.75]
+
+                # if similarity > 0.75, enable guided reply
+                if len(retrieved_documents) > 0:
+                    enable_guided_reply = True
+                else:
+                    enable_guided_reply = False
+                
+                # clean up
+                del temp_documents
+                del results
+                del vectorstore
+                del retrieved_documents
+        else:
+            st.error("Failed to get user questions from the server.")
+
+        # save user input to redis
+        # name -> student_id, value -> {embedding_name: embedding_name, conversation_times: 1}
+        response = requests.post(f"{BACKEND_SERVER}/user_rec", json={"student_id": student_id, "embedding_name": embeddings_select, "question_str": user_input})
+        if response.status_code != 200:
+            st.error("Failed to save user input to the server.")
+
         with st.status("Searching for book content..."):
             embeddings_search_result = embeddings_search(user_input, embeddings_select)
 
@@ -87,6 +134,9 @@ if user_input:
             
         with st.status("Digital TA Thinking..."):
             chat_tmp.append(SystemMessage(f"Extracted information from the content: {extracted_info}"))
+            if enable_guided_reply:
+                chat_tmp.append(SystemMessage("The AI Teaching Assistant found similar questions from the student."))
+                chat_tmp.append(SystemMessage("You should provide a response in guided mode. Not directly respond to the user input, help student think and find the answer."))
             chat_tmp.append(HumanMessage(user_input))
             response = chain.invoke({})
             chat_tmp.append(AIMessage(response))
@@ -102,13 +152,7 @@ if user_input:
 for message in st.session_state['chat_history'].messages:
     if isinstance(message, HumanMessage):
         with st.chat_message("user"):
-            if enable_translation:
-                st.write(ts.translate_text(message.content, translator=TRANSLATOR_PROVIDER, to_language="zh-TW"))
-            else:
-                st.write(message.content)
+            st.write(message.content)
     elif isinstance(message, AIMessage):
         with st.chat_message("assistant"):
-            if enable_translation:
-                st.write(ts.translate_text(message.content, translator=TRANSLATOR_PROVIDER, to_language="zh-TW"))
-            else:
-                st.write(message.content)
+            st.write(message.content)
