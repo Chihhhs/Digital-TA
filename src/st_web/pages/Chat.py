@@ -25,7 +25,7 @@ EXTRACT_PROMPT = ChatPromptTemplate.from_template(
 )
 
 if 'chat_model' not in st.session_state:
-    st.session_state['chat_model'] = "llama-3.3-70b-versatile-groq"
+    st.session_state['chat_model'] = "qwen-qwq-32b-groq"
     # st.session_state['chat_model'] = "llama-3.1-70b-versatile-groq"
 
 def get_all_embeddings() -> list:
