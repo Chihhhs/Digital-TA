@@ -15,17 +15,19 @@ import requests
 import os
 
 # _ = ts.preaccelerate_and_speedtest(timeout=1.5)
-OLLAMA_SERVER = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
-BACKEND_SERVER = os.getenv("BACKEND_SERVER", "http://localhost:8081")
-OPEN_API_KEY = os.getenv("OPENAI_API_KEY", "sk_test_1234567890")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "gsk_test_1234567890")
 TRANSLATOR_PROVIDER = os.getenv("TRANSLATOR_PROVIDER", "google")
-EXTRACT_PROMPT = ChatPromptTemplate.from_template(
+LLM_MODEL           = os.getenv("LLM_MODEL", "gemma3:12b")
+LLM_PROVIDER        = os.getenv("LLM_PROVIDER", "ollama")
+OLLAMA_SERVER       = os.getenv("OLLAMA_SERVER", "http://localhost:11434")
+BACKEND_SERVER      = os.getenv("BACKEND_SERVER", "http://localhost:8081")
+OPEN_API_KEY        = os.getenv("OPENAI_API_KEY", "sk_test_1234567890")
+GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "gsk_test_1234567890")
+EXTRACT_PROMPT      = ChatPromptTemplate.from_template(
     "You are an Top algorithm, you need to according to user input extract information from the content. user input: {user_input}, content: {content}"
 )
 
 if 'chat_model' not in st.session_state:
-    st.session_state['chat_model'] = "qwen-qwq-32b-groq"
+    st.session_state['chat_model'] = LLM_MODEL+ "-" + LLM_PROVIDER
     # st.session_state['chat_model'] = "llama-3.1-70b-versatile-groq"
 
 def get_all_embeddings() -> list:
@@ -46,7 +48,7 @@ def embeddings_search(user_input: str, embedding_name: str) -> dict:
 def init_chat_history() -> ChatPromptTemplate:
     if 'chat_history' not in st.session_state:
         template = ChatPromptTemplate.from_messages([
-            ('system', "You are an AI Teaching Assistant, you need to help students with their questions based on the extracted information."),
+            ('system', "You are an AI Teaching Assistant, you need to help students with their questions based on the extracted information. (reply in zh-tw 繁體中文)"),
         ])
         st.session_state['chat_history'] = template
     else:
@@ -71,8 +73,8 @@ if st.session_state['chat_model'][-4:] == "groq":
     llm = ChatGroq(model=st.session_state['chat_model'][0:-5], api_key=GROQ_API_KEY)
 elif st.session_state['chat_model'][-6:] == "openai":
     llm = ChatOpenAI(model=st.session_state['chat_model'][0:-7], api_key=OPEN_API_KEY)
-else:
-    llm = ChatOllama(model=st.session_state['chat_model'], base_url=OLLAMA_SERVER)
+elif st.session_state['chat_model'][-6:] == "ollama":
+    llm = ChatOllama(model=st.session_state['chat_model'][:-7], base_url=OLLAMA_SERVER)
 user_input = st.chat_input("You can start a conversation with the AI Teaching Assistant here.")
 chain = chat_tmp | llm | StrOutputParser()
 
